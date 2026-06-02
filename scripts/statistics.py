@@ -168,7 +168,7 @@ def analyze_excel_data(df):
     
     # --- 时间范围计算 ---
     # 获取统计基准日期 (今天 00:00:00)，确保使用当前日期
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=4)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     weekday = today.weekday()
     
     # 1. 本周的开始日期
@@ -178,8 +178,13 @@ def analyze_excel_data(df):
     start_of_last_week = start_of_this_week - timedelta(days=7)
     end_of_last_week = (start_of_this_week - timedelta(days=1)).replace(hour=23, minute=59, second=59)
     
-    # 3. 上上周末：上上周日 23:59:59
+    # 3. 上上周范围：上上周一 00:00:00 到 上上周日 23:59:59
+    start_of_week_before_last = start_of_last_week - timedelta(days=7)
     end_of_week_before_last = (start_of_last_week - timedelta(days=1)).replace(hour=23, minute=59, second=59)
+    
+    # 3.1 累计截止日期：上上周的前一天（即上上周日的前一天/上上周开始前一天）
+    #      双周报告已包含上上周数据，累计不应重复，故截止到双周开始之前
+    cumulative_end_date = (start_of_week_before_last - timedelta(days=1)).replace(hour=23, minute=59, second=59)
     
     # 4. 本月范围：本月1号 00:00:00 到 本月最后一天 23:59:59
     start_of_current_month = today.replace(day=1)
@@ -190,18 +195,18 @@ def analyze_excel_data(df):
     
     print("------------------")
     print("统计时间：")
-    print(f"上一周：{start_of_last_week.strftime('%Y-%m-%d')}至{end_of_last_week.strftime('%Y-%m-%d')}")
+    print(f"双周：{start_of_week_before_last.strftime('%Y-%m-%d')}至{end_of_last_week.strftime('%Y-%m-%d')}")
     print(f"本月：{start_of_current_month.strftime('%Y-%m-%d')}至{end_of_current_month.strftime('%Y-%m-%d')}")
-    print(f"累计（包含空白收全日期，并统计至上上周末）：2026年1月1日至{end_of_week_before_last.strftime('%Y-%m-%d')}")
+    print(f"累计（包含空白收全日期，并统计至上上周开始前一天）：2026年1月1日至{cumulative_end_date.strftime('%Y-%m-%d')}")
     print("------------------")
     
     # --- 统计执行 ---
 
-    # 统计1：上一周 (基于 已收金额)
-    last_week_data = valid_data[(valid_data['收全日期'] >= start_of_last_week) & (valid_data['收全日期'] <= end_of_last_week)]
-    last_week_summary = last_week_data.groupby(['组织机构', '管理区', '收费标准'])['已收金额'].sum().reset_index()
-    last_week_summary['时间段'] = "本周累计收费"
-    last_week_summary['具体日期'] = f"{start_of_last_week.strftime('%Y-%m-%d')}至{end_of_last_week.strftime('%Y-%m-%d')}"
+    # 统计1：双周 (上上周一 ~ 上周日，基于 已收金额)
+    two_week_data = valid_data[(valid_data['收全日期'] >= start_of_week_before_last) & (valid_data['收全日期'] <= end_of_last_week)]
+    two_week_summary = two_week_data.groupby(['组织机构', '管理区', '收费标准'])['已收金额'].sum().reset_index()
+    two_week_summary['时间段'] = "本周累计收费"
+    two_week_summary['具体日期'] = f"{start_of_week_before_last.strftime('%Y-%m-%d')}至{end_of_last_week.strftime('%Y-%m-%d')}"
 
     # 统计2：本月 (基于 已收金额)
     current_month_data = valid_data[(valid_data['收全日期'] >= start_of_current_month) & (valid_data['收全日期'] <= end_of_current_month)]
@@ -212,18 +217,18 @@ def analyze_excel_data(df):
     # 统计3：累计（包含空白收全日期，并统计至上上周末）
     # 条件1: 收全日期为空白
     blank_date_data = df[df['收全日期'].isna()]
-    # 条件2: 收全日期在上上周末之前
-    past_date_data = df[df['收全日期'] <= end_of_week_before_last]
+    # 条件2: 收全日期在累计截止日期之前（不包含双周期间）
+    past_date_data = df[df['收全日期'] <= cumulative_end_date]
     # 合并两种情况的数据，并去除重复项
     cumulative_data_to_process = pd.concat([blank_date_data, past_date_data]).drop_duplicates().reset_index(drop=True)
     
     period_cumulative_summary = cumulative_data_to_process.groupby(['组织机构', '管理区', '收费标准'])['已收金额'].sum().reset_index()
-    period_cumulative_summary['时间段'] = "截止上周累计收费"
-    period_cumulative_summary['具体日期'] = f"2026-01-01至{end_of_week_before_last.strftime('%Y-%m-%d')}"
+    period_cumulative_summary['时间段'] = "截止上上周累计收费"
+    period_cumulative_summary['具体日期'] = f"2026-01-01至{cumulative_end_date.strftime('%Y-%m-%d')}"
 
     # --- 合并与保存 ---
     all_summary = pd.concat([
-        last_week_summary, 
+        two_week_summary, 
         current_month_summary, 
         period_cumulative_summary
     ], ignore_index=True)
@@ -237,9 +242,9 @@ def analyze_excel_data(df):
     output_file = f"整合统计结果_{today.strftime('%Y%m%d')}.xlsx"
     with pd.ExcelWriter(output_file) as writer:
         all_summary.to_excel(writer, sheet_name='汇总结果', index=False)
-        last_week_summary.to_excel(writer, sheet_name='本周累计收费', index=False)
+        two_week_summary.to_excel(writer, sheet_name='本周累计收费', index=False)
         current_month_summary.to_excel(writer, sheet_name='月度累计收费', index=False)
-        period_cumulative_summary.to_excel(writer, sheet_name='截止上周累计收费', index=False)
+        period_cumulative_summary.to_excel(writer, sheet_name='截止上上周累计收费', index=False)
         
     print(f"[步骤3] 完成，结果已保存至 {output_file}")
     return all_summary
